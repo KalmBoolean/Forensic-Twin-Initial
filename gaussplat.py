@@ -4,7 +4,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from gsplat import rasterization
+import math
+from gaussian_splatting.diff_gaussian_rasterization import (
+    GaussianRasterizationSettings,
+    GaussianRasterizer,
+)
 from instantsplat.trainer import Trainer
 from insta import InstaSplatBoi
 
@@ -82,60 +86,100 @@ class GaussianSplat:
         self.shDegree = self.instIn.gaussians.max_sh_degree
 
 
-    def Render(self, camera,custom_w2c=None):
-
+    def Render(self, camera, custom_w2c=None):
         means = self.splats["means"]
+        quats = F.normalize(self.splats["quats"], dim=-1)
+        scales = torch.exp(self.splats["scales"])
+        opacities = torch.sigmoid(self.splats["opacities"]).unsqueeze(-1)
 
-        quats = F.normalize(
-            self.splats["quats"],
-            dim=-1,
-        )
+        shs = torch.cat(
+            [self.splats["sh0"], self.splats["shN"]],
+            dim=1
+        ).contiguous()
 
-        scales = torch.exp(
-            self.splats["scales"]
-        )
+        device = means.device
+        dtype = means.dtype
 
-        opacities = torch.sigmoid(
-            self.splats["opacities"]
-        )
+        width = int(camera.image_width)
+        height = int(camera.image_height)
 
-        colors = torch.cat(
-            [
-                self.splats["sh0"],
-                self.splats["shN"],
-            ],
-            dim=1,
-        )
         if custom_w2c is None:
-            viewmat = camera.world_view_transform.T
+            w2c = camera.view_matrix().to(device=device, dtype=dtype)
         else:
-            viewmat = custom_w2c.unsqueeze(0)
+            w2c = custom_w2c.to(device=device, dtype=dtype)
 
-        Ks = camera.K.unsqueeze(0)
+        viewmat = w2c.T.contiguous()
 
-        render, alpha, info = rasterization(
+        K = camera.K.to(device=device, dtype=dtype)
 
-            means=means,
+        tanfovx = width / (2.0 * K[0, 0].item())
+        tanfovy = height / (2.0 * K[1, 1].item())
 
-            quats=quats,
+        znear = 0.01
+        zfar = 100.0
 
-            scales=scales,
+        P = torch.zeros((4, 4), device=device, dtype=dtype)
+        P[0, 0] = 1.0 / tanfovx
+        P[1, 1] = 1.0 / tanfovy
+        P[2, 2] = zfar / (zfar - znear)
+        P[2, 3] = -(zfar * znear) / (zfar - znear)
+        P[3, 2] = 1.0
 
-            opacities=opacities,
+        projmat = P.T.contiguous()
+        full_proj = viewmat @ projmat
 
-            colors=colors,
+        # Camera position in world coordinates
+        campos = torch.linalg.inv(viewmat)[3, :3].contiguous()
 
-            viewmats=viewmat,
-            Ks=Ks,
-
-            width=camera.image_width,
-            height=camera.image_height,
-
-            sh_degree=self.shDegree,
-
+        # Graphdeco rasterizer settings
+        raster_settings = GaussianRasterizationSettings(
+            image_height=height,
+            image_width=width,
+            tanfovx=tanfovx,
+            tanfovy=tanfovy,
+            bg=torch.zeros(3, device=device, dtype=dtype),
+            scale_modifier=1.0,
+            viewmatrix=viewmat,
+            projmatrix=full_proj,
+            sh_degree=int(self.shDegree),
+            campos=campos,
+            prefiltered=False,
+            debug=False,
+            antialiasing=False
         )
 
-        return render[0], info
+        rasterizer = GaussianRasterizer(
+            raster_settings=raster_settings
+        )
+
+        # Screen-space means; required by Graphdeco's API
+        means2D = torch.zeros_like(
+            means,
+            requires_grad=True
+        )
+
+        rendered_image, radii, depth_image = rasterizer(
+            means3D=means,
+            means2D=means2D,
+            shs=shs,
+            colors_precomp=None,
+            opacities=opacities,
+            scales=scales,
+            rotations=quats,
+            cov3D_precomp=None,
+        )
+
+        # Convert [C, H, W] to [H, W, C]
+        rendered_image = rendered_image.permute(1, 2, 0).contiguous()
+
+        info = {
+            "radii": radii,
+            "depth": depth_image,
+            "means2D": means2D,
+            "visibility": radii > 0,
+        }
+
+        return rendered_image, info
 
     def Train(
         self,
