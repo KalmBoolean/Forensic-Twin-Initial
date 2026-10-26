@@ -22,7 +22,6 @@ from viewport import Viewport
 from insta import InstaSplatBoi
 from gaussplat import GaussianSplat
 
-
 class BuildWorker(QObject):
     statusChanged = Signal(str)
     finished = Signal(object)
@@ -41,7 +40,6 @@ class BuildWorker(QObject):
             inst = InstaSplatBoi(self.imagePath, output)
             inst.ClearData()
             inst.Build()
-
             self.statusChanged.emit("Initializing Gaussians...")
 
             gaussianSplat = GaussianSplat(
@@ -54,7 +52,7 @@ class BuildWorker(QObject):
 
             self.statusChanged.emit("Training Gaussians...")
 
-            gaussianSplat.Train(iterations=1000)
+            gaussianSplat.Train(iterations=1100)
 
             self.finished.emit(gaussianSplat)
 
