@@ -52,7 +52,7 @@ class BuildWorker(QObject):
 
             self.statusChanged.emit("Training Gaussians...")
 
-            gaussianSplat.Train(iterations=1000)
+            gaussianSplat.Train(iterations=1100)
 
             self.finished.emit(gaussianSplat)
 

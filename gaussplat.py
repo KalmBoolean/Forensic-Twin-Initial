@@ -108,7 +108,7 @@ class GaussianSplat:
         else:
             w2c = custom_w2c.to(device=device, dtype=dtype)
 
-        viewmat = w2c.T.contiguous()
+        viewmat = camera.view_matrix_with_roll().to(device=device, dtype=dtype).T.contiguous()
 
         K = camera.K.to(device=device, dtype=dtype)
 
