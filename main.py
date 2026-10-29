@@ -64,7 +64,6 @@ class BuildWorker(QObject):
             inst = InstaSplatBoi(images_dir, output)
             inst.ClearData()
             inst.Build()
-
             self.statusChanged.emit("Initializing Gaussians...")
             gaussianSplat = GaussianSplat(
                 instInput=inst,
