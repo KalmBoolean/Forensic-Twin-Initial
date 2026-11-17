@@ -21,7 +21,7 @@ from .projectitems import *
 from abstractors.workers import BuildWorker
 from .leftpanel import LeftPanel
 from .viewportarea import ViewportArea
-
+from .rightpanel import RightPanel
 class SceneBuilder(QWidget):
 
     imageExtensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -37,15 +37,16 @@ class SceneBuilder(QWidget):
             viewport=self.viewportArea,
             on_new_build=self.CreateBuild,
         )
+        self.rightPanel = RightPanel()
         self.buildUi()
 
     def buildUi(self):
         layout = QVBoxLayout(self)
-
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.leftPanel)
         splitter.addWidget(self.viewportArea)
-        splitter.setSizes([300, 1100])
+        splitter.addWidget(self.rightPanel)
+        splitter.setSizes([250, 600,250])
 
         layout.addWidget(splitter,1)
 
