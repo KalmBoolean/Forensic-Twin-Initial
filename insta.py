@@ -16,8 +16,7 @@ class InstaSplatBoi():
         self.gaussians = CameraTrainableGaussianModel(sh_degree=2).to("cuda")
 
     def Build(self):
-        initialized_point_cloud, initialized_cameras = self.initializer(self.image_path_list,self.output
-                                                                        )
+        initialized_point_cloud, initialized_cameras = self.initializer(self.image_path_list)
         self.cameras = initialized_cameras[:]
         self.dataset = TrainableInitializedCameraDataset(initialized_cameras).to("cuda")   
         self.gaussians.create_from_pcd(initialized_point_cloud.points, initialized_point_cloud.colors)

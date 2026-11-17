@@ -3,7 +3,7 @@ from loader import load_gaussian_ply
 import numpy as np
 import torch
 import torch.nn.functional as F
-
+from plyfile import PlyData, PlyElement
 import math
 from gaussian_splatting.diff_gaussian_rasterization import (
     GaussianRasterizationSettings,
@@ -200,22 +200,110 @@ class GaussianSplat:
         self.Initialize()
 
 
-    def Save(self, filename="gaussians.pt"):
 
-        path = self.outPath / filename
+    def Save(self, path):
+        path = Path(path)
 
-        state = {
-            key: value.detach().cpu()
-            for key, value in self.splats.items()
-        }
+        means = self.splats["means"].detach().cpu().numpy()
 
-        torch.save(
-            state,
-            path,
+        normals = np.zeros_like(means)
+
+        sh0 = (
+            self.splats["sh0"]
+            .detach()
+            .transpose(1, 2)
+            .flatten(start_dim=1)
+            .contiguous()
+            .cpu()
+            .numpy()
         )
 
-        print(
-            f"Saved Gaussian model to {path}"
+        shN = (
+            self.splats["shN"]
+            .detach()
+            .transpose(1, 2)
+            .flatten(start_dim=1)
+            .contiguous()
+            .cpu()
+            .numpy()
         )
 
-        return path
+        opacities = (
+            self.splats["opacities"]
+            .detach()
+            .sigmoid()
+            .cpu()
+            .numpy()
+            .reshape(-1, 1)
+        )
+
+        scales = (
+            self.splats["scales"]
+            .detach()
+            .cpu()
+            .numpy()
+        )
+
+        rotations = (
+            F.normalize(
+                self.splats["quats"].detach(),
+                dim=-1
+            )
+            .cpu()
+            .numpy()
+        )
+
+        attributes = np.concatenate(
+            [
+                means,
+                normals,
+                sh0,
+                shN,
+                opacities,
+                scales,
+                rotations
+            ],
+            axis=1
+        )
+
+        dtype = [
+            ("x", "f4"),
+            ("y", "f4"),
+            ("z", "f4"),
+            ("nx", "f4"),
+            ("ny", "f4"),
+            ("nz", "f4"),
+        ]
+
+        dtype += [
+            (f"f_dc_{i}", "f4")
+            for i in range(sh0.shape[1])
+        ]
+
+        dtype += [
+            (f"f_rest_{i}", "f4")
+            for i in range(shN.shape[1])
+        ]
+
+        dtype += [("opacity", "f4")]
+
+        dtype += [
+            (f"scale_{i}", "f4")
+            for i in range(scales.shape[1])
+        ]
+
+        dtype += [
+            (f"rot_{i}", "f4")
+            for i in range(rotations.shape[1])
+        ]
+
+        elements = np.empty(
+            means.shape[0],
+            dtype=dtype
+        )
+
+        elements[:] = list(map(tuple, attributes))
+
+        PlyData([
+            PlyElement.describe(elements, "vertex")
+        ]).write(str(path))

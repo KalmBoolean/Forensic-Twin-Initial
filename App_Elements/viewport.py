@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QSizePolicy
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel
 
@@ -20,7 +20,11 @@ class Viewport(QLabel):
             width=self.width(),
             height=self.height(),
         )
-
+        self.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Ignored,
+        )
+        self.setMinimumSize(1, 1)
         self.lastMouse = None
         self.mouseCaptured = False
         self.mouseMode = None
@@ -93,13 +97,12 @@ class Viewport(QLabel):
 
         pixmap = QPixmap.fromImage(qimage)
 
-        self.setPixmap(
-            pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        target = self.size() - QSize(8, 8)
+        self.setPixmap(pixmap.scaled(
+            target,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
