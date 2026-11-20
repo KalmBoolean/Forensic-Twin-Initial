@@ -5,7 +5,7 @@ import os
 from instantsplat.initializer import TrainableInitializedCameraDataset
 from gaussian_splatting import CameraTrainableGaussianModel
 from instantsplat.initializer import TrainableInitializedCameraDataset
-
+import torch
 class InstaSplatBoi():
 
     def __init__(self,imgPath,outPath):

@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QLabel, QSizePolicy
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel
-
+from itssocooked import GaussianProjector
 from camera import Camera
 
 
@@ -14,7 +14,6 @@ class Viewport(QLabel):
         super().__init__(parent)
 
         self.splats = None
-
         self.camera = Camera(
             device=torch.device("cpu"),
             width=self.width(),
@@ -64,22 +63,14 @@ class Viewport(QLabel):
         self.camera.resize(self.width(), self.height())
 
         # Always use the rolled matrix when supported.
-        view_matrix_fn = getattr(
-            self.camera,
-            "view_matrix_with_roll",
-            None,
-        )
+        view_matrix_fn = self.camera.view_matrix_with_roll
 
-        if callable(view_matrix_fn):
-            view_matrix = view_matrix_fn()
-        else:
-            view_matrix = self.camera.view_matrix()
+        view_matrix = view_matrix_fn()
 
         rendered, _ = self.splats.Render(
             self.camera,
             view_matrix,
         )
-
         image = rendered.detach().cpu().numpy()
         image = np.clip(
             image * 255.0,

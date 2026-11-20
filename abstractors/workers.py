@@ -1,7 +1,7 @@
 from PySide6.QtCore import Signal, Slot, QRunnable, QObject
 from insta import InstaSplatBoi
 from gaussplat import GaussianSplat
-
+import torch
 class WorkerSignals(QObject):
     statusChanged = Signal(str)
     finished = Signal(object)
@@ -25,7 +25,6 @@ class BuildWorker(QRunnable):
             inst = InstaSplatBoi(self.imagePath, output)
             inst.ClearData()
             inst.Build()
-
             self.signals.statusChanged.emit("Initializing Gaussians...")
 
             gaussianSplat = GaussianSplat(
@@ -35,7 +34,6 @@ class BuildWorker(QRunnable):
                 device="cuda",
                 sh_degree=2,
             )
-
             self.signals.statusChanged.emit("Training Gaussians...")
 
             gaussianSplat.Train(iterations=1000)
