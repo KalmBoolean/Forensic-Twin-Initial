@@ -1,7 +1,12 @@
-from PySide6.QtCore import Signal, Slot, QRunnable, QObject
-from insta import InstaSplatBoi
+from PySide6.QtCore import Signal, QRunnable, QObject
 from gaussplat import GaussianSplat
-import torch
+import pycolmap
+from glostuff import GlobalMap
+from pathlib import Path
+from PySide6.QtCore import QRunnable, QObject, Signal
+from gaussplat import GaussianSplat
+import traceback
+
 class WorkerSignals(QObject):
     statusChanged = Signal(str)
     finished = Signal(object)
@@ -18,34 +23,107 @@ class BuildWorker(QRunnable):
 
     def run(self):
         try:
-            self.signals.statusChanged.emit("Running InstantSplat Initialiser...")
+            output = self.imagePath.parent
 
-            output = self.imagePath.parent / "insta_output"
+            self.signals.statusChanged.emit(
+                "Extracting features and running GLOMAP..."
+            )
 
-            inst = InstaSplatBoi(self.imagePath, output)
-            inst.ClearData()
-            inst.Build()
-            self.signals.statusChanged.emit("Initializing Gaussians...")
+            GlobalMap(
+                outputDir=output,
+                imageDir=self.imagePath
+            )
+
+            self.signals.statusChanged.emit(
+                "Loading GLOMAP reconstruction..."
+            )
+
+            sparsePath = output / "sparse" / "0"
+
+            reconstruction = pycolmap.Reconstruction(
+                str(sparsePath)
+            )
+            gsOutput = output / "gsplat"
+
+            self.signals.statusChanged.emit(
+                "Initializing Gaussians..."
+            )
 
             gaussianSplat = GaussianSplat(
-                instInput=inst,
+                reconstruction=reconstruction,
                 image_path=self.imagePath,
-                output_path=output / "gsplat",
+                output_path=gsOutput,
                 device="cuda",
                 sh_degree=2,
             )
-            self.signals.statusChanged.emit("Training Gaussians...")
 
-            gaussianSplat.Train(iterations=1000)
+            gaussianSplat.Initialize()
 
+            self.signals.statusChanged.emit(
+                "Training Gaussians..."
+            )
+
+            gaussianSplat.Train(
+                iterations=7000
+            )
+            gaussianSplat.Save(output / "output" / "gsplat.ply")
             self.signals.finished.emit(gaussianSplat)
 
         except Exception as e:
-            import traceback
             tb = traceback.format_exc()
+
             print("\n========== BUILD ERROR ==========")
             print(type(e).__name__)
             print(e)
             print(tb)
             print("=================================\n")
+
+            self.signals.failed.emit(str(e), tb)
+
+class FolderBuildWorker(QRunnable):
+
+    def __init__(self, buildPath):
+        super().__init__()
+
+        self.buildPath = Path(buildPath)
+        self.imagesPath = self.buildPath / "images"
+        self.sparsePath = self.buildPath / "sparse" / "0"
+
+        self.signals = WorkerSignals()
+
+    def run(self):
+        try:
+            self.signals.statusChanged.emit("Loading GLOMAP reconstruction")
+
+            reconstruction = pycolmap.Reconstruction(
+                str(self.sparsePath)
+            )
+
+            self.signals.statusChanged.emit("Initializing Gaussian Splatting")
+
+            gaussianSplat = GaussianSplat(
+                reconstruction=reconstruction,
+                image_path=self.imagesPath,
+                output_path=self.buildPath / "gsplat",
+                device="cuda",
+                sh_degree=2
+            )
+
+            gaussianSplat.Initialize()
+
+            self.signals.statusChanged.emit("Training Gaussian Splatting")
+
+            gaussianSplat.Train(iterations=20000)
+            gaussianSplat.Save(self.buildPath/"output"/"gsplat.ply")
+            self.signals.finished.emit(gaussianSplat)
+
+        except Exception as e:
+            tb = traceback.format_exc()
+            
+            print("\n========== BUILD ERROR ==========")
+            print(type(e).__name__)
+            print(e)
+            print(tb)
+            print("=================================\n")
+            
             self.signals.failed.emit(str(e), tb)

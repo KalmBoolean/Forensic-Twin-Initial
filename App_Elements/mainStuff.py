@@ -36,6 +36,10 @@ class SceneBuilder(QWidget):
         self.leftPanel = LeftPanel(
             viewport=self.viewportArea,
             on_new_build=self.CreateBuild,
+            threadpool=self.threadpool,
+            update_status=self.BuildStartUIStuff,
+            build_failed=self.onBuildFailed,
+            build_finished=self.onBuildFinished
         )
         self.rightPanel = RightPanel()
         self.buildUi()
@@ -90,14 +94,12 @@ class SceneBuilder(QWidget):
             )
             return
 
-        self.leftPanel.new_build_button.setEnabled(False)
-        self.progress.show()
-        self.statusLabel.setText("Starting build...")
+        self.BuildStartUIStuff("Starting Build...")
 
         self.worker = BuildWorker(imagePath)
 
         self.worker.signals.statusChanged.connect(
-            self.statusLabel.setText
+            self.BuildStartUIStuff
         )
 
         self.worker.signals.finished.connect(
@@ -110,11 +112,15 @@ class SceneBuilder(QWidget):
 
         self.threadpool.start(self.worker)
 
+    def BuildStartUIStuff(self,txt):
+        self.leftPanel.new_build_button.setEnabled(False)
+        self.progress.show()
+        self.statusLabel.setText(txt)
+        
     def onBuildFinished(self, gaussianSplat):
         self.gaussianSplat = gaussianSplat
 
         try:
-            self.gaussianSplat.Save(self.outputPath / "gsplat.ply")
 
             self.GetProjectItems(self.buildPath)
 
@@ -156,9 +162,8 @@ class SceneBuilder(QWidget):
 
     def GetProjectItems(self, build_path):
 
-        build_item = ProjectItem(
+        build_item = FolderItem(
             build_path.name,
-            ItemType.folder,
             build_path,
             self.leftPanel.root
         )

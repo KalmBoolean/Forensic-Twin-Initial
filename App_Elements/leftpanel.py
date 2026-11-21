@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from abstractors.projectitem import ProjectItem
+from App_Elements.projectitems import FolderItem
 
 
 class LeftPanel(QWidget):
@@ -17,13 +18,19 @@ class LeftPanel(QWidget):
         self,
         viewport,
         on_new_build,
+        update_status,
+        build_finished,
+        build_failed,
+        threadpool,
         parent=None
     ):
         super().__init__(parent)
-
+        self.threadPool = threadpool
+        self.on_update_status = update_status
+        self.on_build_finished = build_finished
+        self.on_build_failed = build_failed
         self.viewport = viewport
         self.on_new_build = on_new_build
-
         self.build_ui()
 
     def build_ui(self):
@@ -65,8 +72,27 @@ class LeftPanel(QWidget):
     def select_item(self):
         item = self.tree.currentItem()
 
-        if isinstance(item, ProjectItem):
+        if not isinstance(item, ProjectItem):
+            return
+
+        if isinstance(item, FolderItem):
+            worker = item.select()
+
+            worker.signals.statusChanged.connect(
+                self.on_update_status
+            )
+            worker.signals.finished.connect(
+                lambda splat: self.on_build_finished(splat)
+            )
+            worker.signals.failed.connect(
+                self.on_build_failed
+            )
+
+            self.threadPool.start(worker)
+
+        else:
             item.select(self.viewport)
+
 
     def clear_project(self):
         self.root.takeChildren()

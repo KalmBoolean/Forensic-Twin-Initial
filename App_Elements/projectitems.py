@@ -1,12 +1,15 @@
 
 from abstractors.projectitem import ProjectItem, ItemType
-
+from abstractors.workers import FolderBuildWorker
 class FolderItem(ProjectItem):
 
     def __init__(self, name, path, parent=None):
         super().__init__(
             name, ItemType.folder, path, parent
         )
+    def select(self):
+        return FolderBuildWorker(self.path)
+        
 
 
 class ImageItem(ProjectItem):

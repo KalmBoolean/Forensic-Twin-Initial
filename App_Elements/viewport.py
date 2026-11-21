@@ -4,7 +4,6 @@ from PySide6.QtWidgets import QLabel, QSizePolicy
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel
-from itssocooked import GaussianProjector
 from camera import Camera
 
 
@@ -48,7 +47,7 @@ class Viewport(QLabel):
             return
 
         means = (
-            self.splats.splats["means"]
+            self.splats.splats.get_xyz
             .detach()
             .cpu()
             .numpy()

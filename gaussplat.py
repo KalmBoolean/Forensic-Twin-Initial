@@ -1,29 +1,30 @@
 from pathlib import Path
-from loader import load_gaussian_ply
 import numpy as np
 import torch
 import torch.nn.functional as F
-from plyfile import PlyData, PlyElement
-import math
+import pycolmap
+from gaussian_splatting import GaussianModel
+from gaussian_splatting.dataset.colmap import colmap_init
+from gaussian_splatting.trainer import BaseOpacityResetDensificationTrainer
+from gaussian_splatting.dataset.colmap import ColmapCameraDataset
 from gaussian_splatting.diff_gaussian_rasterization import (
     GaussianRasterizationSettings,
     GaussianRasterizer,
 )
-from instantsplat.trainer import Trainer
-from insta import InstaSplatBoi
+
 
 class GaussianSplat:
 
     def __init__(
         self,
-        instInput,
+        reconstruction,
         image_path,
         output_path,
         device="cuda",
         sh_degree=2,
     ):
         self.lambda_dssim = 0.2
-        self.instIn = instInput
+        self.reconstruction = reconstruction
 
         self.imgPath = Path(image_path)
         self.outPath = Path(output_path)
@@ -31,71 +32,64 @@ class GaussianSplat:
         self.device = torch.device(device)
         self.shDegree = sh_degree
 
-        self.outPath.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        self.outPath.mkdir(parents=True, exist_ok=True)
 
         self.splats = None
 
     @classmethod
-    def FromPLY(cls, path, device="cuda"):
-        #alternate constructor, damn
+    def FromPLY(cls, path, device="cuda", sh_degree=2):
+
         self = cls.__new__(cls)
 
         self.lambda_dssim = 0.2
-        self.instIn = None
+        self.reconstruction = None
         self.imgPath = None
-        self.outPath = Path(path).parent
+        self.outPath = None
 
         self.device = torch.device(device)
+        self.shDegree = sh_degree
 
-        splats, shDegree = load_gaussian_ply(path, device=device)
-
-        self.splats = splats
-        self.shDegree = shDegree
+        self.splats = GaussianModel(sh_degree).to(self.device)
+        self.splats.load_ply(str(path))
 
         return self
+
     def Initialize(self):
-        self.splats = torch.nn.ParameterDict({
-
-        "means": torch.nn.Parameter(
-            self.instIn.gaussians._xyz.detach().clone()
-        ),
-        "quats": torch.nn.Parameter(
-            self.instIn.gaussians._rotation.detach().clone()
-        ),
-
-        "scales": torch.nn.Parameter(
-            self.instIn.gaussians._scaling.detach().clone()
-        ),
-
-        "opacities": torch.nn.Parameter(
-            self.instIn.gaussians._opacity.detach().clone().squeeze(-1)
-        ),
-
-        "sh0": torch.nn.Parameter(
-            self.instIn.gaussians._features_dc.detach().clone()
-        ),
-
-        "shN": torch.nn.Parameter(
-            self.instIn.gaussians._features_rest.detach().clone()
-        ),
-    })
-
-        self.shDegree = self.instIn.gaussians.max_sh_degree
-
+        self.splats = GaussianModel(self.shDegree).to(self.device)
+        scenePath = self.imgPath.parent
+        sparsePath = scenePath / "sparse" / "0"
+        self.undistortedPath = scenePath / "undistorted"
+        sparseDir = self.undistortedPath / "sparse"
+        
+        
+        if not self.undistortedPath.exists():
+            pycolmap.undistort_images(
+                output_path=str(self.undistortedPath),
+                input_path=str(sparsePath),
+                image_path=str(self.imgPath),
+                output_type="COLMAP"
+            )
+        
+        modelDir = sparseDir / "0"
+        if not modelDir.exists():
+            modelDir.mkdir(parents=True)
+        
+        for filePath in sparseDir.glob("*.bin"):
+            filePath.rename(modelDir / filePath.name)
+            
+        colmap_init(
+            self.splats,
+            str(self.undistortedPath)
+        )
 
     def Render(self, camera, custom_w2c=None):
-        means = self.splats["means"]
-        quats = F.normalize(self.splats["quats"], dim=-1)
-        scales = torch.exp(self.splats["scales"])
-        opacities = torch.sigmoid(self.splats["opacities"]).unsqueeze(-1)
 
-        shs = torch.cat(
-            [self.splats["sh0"], self.splats["shN"]],
-            dim=1
-        ).contiguous()
+        means = self.splats.get_xyz
+        quats = self.splats.get_rotation
+        scales = self.splats.get_scaling
+        opacities = self.splats.get_opacity
+
+        shs = self.splats.get_features.contiguous()
 
         device = means.device
         dtype = means.dtype
@@ -108,7 +102,10 @@ class GaussianSplat:
         else:
             w2c = custom_w2c.to(device=device, dtype=dtype)
 
-        viewmat = camera.view_matrix_with_roll().to(device=device, dtype=dtype).T.contiguous()
+        viewmat = camera.view_matrix_with_roll().to(
+            device=device,
+            dtype=dtype
+        ).T.contiguous()
 
         K = camera.K.to(device=device, dtype=dtype)
 
@@ -128,10 +125,8 @@ class GaussianSplat:
         projmat = P.T.contiguous()
         full_proj = viewmat @ projmat
 
-        # Camera position in world coordinates
         campos = torch.linalg.inv(viewmat)[3, :3].contiguous()
 
-        # Graphdeco rasterizer settings
         raster_settings = GaussianRasterizationSettings(
             image_height=height,
             image_width=width,
@@ -141,7 +136,7 @@ class GaussianSplat:
             scale_modifier=1.0,
             viewmatrix=viewmat,
             projmatrix=full_proj,
-            sh_degree=int(self.shDegree),
+            sh_degree=int(self.splats.active_sh_degree),
             campos=campos,
             prefiltered=False,
             debug=False,
@@ -152,7 +147,6 @@ class GaussianSplat:
             raster_settings=raster_settings
         )
 
-        # Screen-space means; required by Graphdeco's API
         means2D = torch.zeros_like(
             means,
             requires_grad=True
@@ -169,8 +163,9 @@ class GaussianSplat:
             cov3D_precomp=None,
         )
 
-        # Convert [C, H, W] to [H, W, C]
-        rendered_image = rendered_image.permute(1, 2, 0).contiguous()
+        rendered_image = rendered_image.permute(
+            1, 2, 0
+        ).contiguous()
 
         info = {
             "radii": radii,
@@ -186,124 +181,36 @@ class GaussianSplat:
         iterations=7000,
         callback=None,
     ):
+        
 
-        trainer = Trainer(
-            self.instIn.gaussians,
-            dataset=self.instIn.dataset,
+        dataset = ColmapCameraDataset(str(self.undistortedPath))
+
+        if self.splats is None:
+            self.Initialize()
+
+        trainer = BaseOpacityResetDensificationTrainer(
+            self.splats,
+            dataset=dataset,
         )
 
         for i in range(iterations):
 
-            camera = self.instIn.dataset[i % len(self.instIn.dataset)]
+            camera = dataset[i % len(dataset)]
+
             loss, out = trainer.step(camera)
-            print(f"Step {i:5d} | Loss: {loss.item():.6f}")
-        self.Initialize()
 
+            if callback is not None:
+                callback(i, loss)
 
+            
+            print(
+                    f"Step {i:5d} | "
+                    f"Loss: {loss.item():.6f} | "
+                    f"Gaussians: {len(self.splats.get_xyz)}"
+            )
+
+        return self.splats
 
     def Save(self, path):
-        path = Path(path)
 
-        means = self.splats["means"].detach().cpu().numpy()
-
-        normals = np.zeros_like(means)
-
-        sh0 = (
-            self.splats["sh0"]
-            .detach()
-            .transpose(1, 2)
-            .flatten(start_dim=1)
-            .contiguous()
-            .cpu()
-            .numpy()
-        )
-
-        shN = (
-            self.splats["shN"]
-            .detach()
-            .transpose(1, 2)
-            .flatten(start_dim=1)
-            .contiguous()
-            .cpu()
-            .numpy()
-        )
-
-        opacities = (
-            self.splats["opacities"]
-            .detach()
-            .sigmoid()
-            .cpu()
-            .numpy()
-            .reshape(-1, 1)
-        )
-
-        scales = (
-            self.splats["scales"]
-            .detach()
-            .cpu()
-            .numpy()
-        )
-
-        rotations = (
-            F.normalize(
-                self.splats["quats"].detach(),
-                dim=-1
-            )
-            .cpu()
-            .numpy()
-        )
-
-        attributes = np.concatenate(
-            [
-                means,
-                normals,
-                sh0,
-                shN,
-                opacities,
-                scales,
-                rotations
-            ],
-            axis=1
-        )
-
-        dtype = [
-            ("x", "f4"),
-            ("y", "f4"),
-            ("z", "f4"),
-            ("nx", "f4"),
-            ("ny", "f4"),
-            ("nz", "f4"),
-        ]
-
-        dtype += [
-            (f"f_dc_{i}", "f4")
-            for i in range(sh0.shape[1])
-        ]
-
-        dtype += [
-            (f"f_rest_{i}", "f4")
-            for i in range(shN.shape[1])
-        ]
-
-        dtype += [("opacity", "f4")]
-
-        dtype += [
-            (f"scale_{i}", "f4")
-            for i in range(scales.shape[1])
-        ]
-
-        dtype += [
-            (f"rot_{i}", "f4")
-            for i in range(rotations.shape[1])
-        ]
-
-        elements = np.empty(
-            means.shape[0],
-            dtype=dtype
-        )
-
-        elements[:] = list(map(tuple, attributes))
-
-        PlyData([
-            PlyElement.describe(elements, "vertex")
-        ]).write(str(path))
+        self.splats.save_ply(str(path))
